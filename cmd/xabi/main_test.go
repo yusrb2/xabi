@@ -24,7 +24,18 @@ func TestRunVersionAndHelp(t *testing.T) {
 	if code := run([]string{"--help"}, s); code != cli.ExitOK {
 		t.Fatalf("help exit code = %d, want 0", code)
 	}
-	if !strings.Contains(out.String(), "Commands:") {
-		t.Errorf("unexpected help output: %q", out.String())
+	for _, want := range []string{"Commands:", "init", "doctor"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("help output missing %q: %q", want, out.String())
+		}
+	}
+
+	out.Reset()
+	errBuf.Reset()
+	if code := run([]string{"init", "--help"}, s); code != cli.ExitOK {
+		t.Fatalf("init --help exit code = %d, want 0", code)
+	}
+	if !strings.Contains(out.String(), "--dry-run") {
+		t.Errorf("init help missing --dry-run: %q", out.String())
 	}
 }

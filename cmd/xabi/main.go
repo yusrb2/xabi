@@ -7,6 +7,8 @@ import (
 	"syscall"
 
 	"github.com/yusrb2/xabi/internal/cli"
+	"github.com/yusrb2/xabi/internal/commands"
+	"github.com/yusrb2/xabi/internal/sysutil"
 	"github.com/yusrb2/xabi/internal/xdg"
 )
 
@@ -20,9 +22,17 @@ func run(args []string, s cli.Streams) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	return newRouter(version, xdg.Resolve).Dispatch(ctx, args, s)
+	return newRouter(version, xdg.Resolve, sysutil.OS{}).Dispatch(ctx, args, s)
 }
 
-func newRouter(ver string, _ func() (xdg.Paths, error)) *cli.Router {
-	return cli.NewRouter(ver)
+func newRouter(ver string, resolveXDG func() (xdg.Paths, error), sys sysutil.System) *cli.Router {
+	deps := commands.Deps{
+		ResolveXDG: resolveXDG,
+		Sys:        sys,
+	}
+	return cli.NewRouter(
+		ver,
+		commands.NewInitCommand(deps),
+		commands.NewDoctorCommand(deps),
+	)
 }
