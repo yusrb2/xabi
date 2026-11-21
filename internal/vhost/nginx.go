@@ -7,6 +7,7 @@ import (
 	"text/template"
 
 	"github.com/yusrb2/xabi/internal/config"
+	"github.com/yusrb2/xabi/internal/php"
 	"github.com/yusrb2/xabi/internal/xdg"
 )
 
@@ -41,11 +42,7 @@ func BuildServerTemplateData(site Site, paths xdg.Paths, cfg config.Config) Serv
 func BuildServerTemplateDataForOS(site Site, paths xdg.Paths, cfg config.Config, goos string) ServerTemplateData {
 	fastCGI := "xabi_php"
 	if site.PHP != "" {
-		if goos == "windows" {
-			fastCGI = config.WindowsPHPFastCGIAddr
-		} else {
-			fastCGI = "unix:" + filepath.ToSlash(paths.SocketFile("php-"+site.PHP))
-		}
+		fastCGI = php.FastCGIUpstream(paths, site.PHP, goos)
 	}
 
 	certPath := site.CertFile

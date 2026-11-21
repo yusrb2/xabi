@@ -98,6 +98,7 @@ func TestRenderNginxVHostForwardSlashAndProxyWebSocket(t *testing.T) {
 		Domain: "laravel.test",
 		Kind:   KindPHP,
 		Root:   `C:\Users\dev\code\laravel\public`,
+		PHP:    "8.3",
 	}
 	out, err := RenderNginxVHost(BuildServerTemplateDataForOS(phpSite, paths, cfg, "windows"))
 	if err != nil {
@@ -111,6 +112,17 @@ func TestRenderNginxVHostForwardSlashAndProxyWebSocket(t *testing.T) {
 	}
 	if !strings.Contains(out, "try_files $uri $uri/ /index.php?$query_string;") {
 		t.Errorf("expected PHP try_files in nginx vhost:\n%s", out)
+	}
+	if !strings.Contains(out, "fastcgi_pass 127.0.0.1:9083;") {
+		t.Errorf("expected deterministic Windows PHP 8.3 port 9083 in vhost:\n%s", out)
+	}
+
+	linOut, err := RenderNginxVHost(BuildServerTemplateDataForOS(phpSite, paths, cfg, "linux"))
+	if err != nil {
+		t.Fatalf("RenderNginxVHost(linux) failed: %v", err)
+	}
+	if !strings.Contains(linOut, "fastcgi_pass unix:C:/Users/dev/AppData/Local/Temp/xabi/php-8.3.sock;") {
+		t.Errorf("expected Linux versioned PHP socket in vhost:\n%s", linOut)
 	}
 
 	proxySite := Site{

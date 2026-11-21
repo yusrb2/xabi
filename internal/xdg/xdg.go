@@ -110,6 +110,11 @@ func (p Paths) PHPDir() string {
 	return filepath.Join(p.ConfigDir, "php")
 }
 
+// PHPDataDir returns the directory holding user-installed PHP runtimes per version.
+func (p Paths) PHPDataDir() string {
+	return filepath.Join(p.DataDir, "php")
+}
+
 // DBDir returns the user-space database data directory.
 func (p Paths) DBDir() string {
 	return filepath.Join(p.DataDir, "db")

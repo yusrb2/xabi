@@ -14,6 +14,7 @@ import (
 	"github.com/yusrb2/xabi/internal/config"
 	"github.com/yusrb2/xabi/internal/daemon"
 	"github.com/yusrb2/xabi/internal/hosts"
+	"github.com/yusrb2/xabi/internal/php"
 	"github.com/yusrb2/xabi/internal/sysutil"
 	"github.com/yusrb2/xabi/internal/vhost"
 	"github.com/yusrb2/xabi/internal/xdg"
@@ -106,8 +107,22 @@ func runAdd(ctx context.Context, args []string, s cli.Streams, deps Deps) int {
 	}
 
 	phpVer := strings.TrimSpace(*phpFlag)
-	if phpVer == "" {
-		phpVer = readDotPHPVersion(projectDir)
+	if phpVer != "" {
+		norm, err := php.NormalizeVersion(phpVer)
+		if err != nil {
+			cli.Error(s.Err, "%v", err)
+			return cli.ExitErr
+		}
+		phpVer = norm
+	} else {
+		dotVer, found, err := php.ReadDotPHPVersion(projectDir)
+		if err != nil {
+			cli.Error(s.Err, "%v", err)
+			return cli.ExitErr
+		}
+		if found && dotVer != "system" {
+			phpVer = dotVer
+		}
 	}
 
 	kind, root, proxyURL, err := vhost.DetectProject(projectDir, *proxyFlag, phpVer)
@@ -435,13 +450,4 @@ func restoreSiteFiles(confPath string, prev []byte, hadPrev bool) {
 		return
 	}
 	_ = os.Remove(confPath)
-}
-
-func readDotPHPVersion(dir string) string {
-	data, err := os.ReadFile(filepath.Join(dir, ".php-version"))
-	if err != nil {
-		return ""
-	}
-	line := strings.TrimSpace(strings.Split(string(data), "\n")[0])
-	return strings.TrimPrefix(line, "v")
 }

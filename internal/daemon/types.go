@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"text/template"
 
 	"github.com/yusrb2/xabi/internal/config"
+	"github.com/yusrb2/xabi/internal/php"
 	"github.com/yusrb2/xabi/internal/sysutil"
+	"github.com/yusrb2/xabi/internal/vhost"
 	"github.com/yusrb2/xabi/internal/xdg"
 )
 
@@ -186,16 +189,56 @@ func PHPFPMSocketPath(paths xdg.Paths, version string) string {
 
 // ResolvePHPVersion determines the active PHP version tag and binary path.
 func ResolvePHPVersion(ctx context.Context, sys sysutil.System, cfg config.Config) (version string, binPath string, ok bool) {
+	return ResolvePHPVersionIn(ctx, xdg.Paths{}, sys, cfg.PHPDefault)
+}
+
+// ResolvePHPVersionIn resolves the binary for targetVer using sys.LookBinary and php.Discover.
+func ResolvePHPVersionIn(ctx context.Context, paths xdg.Paths, sys sysutil.System, targetVer string) (version string, binPath string, ok bool) {
+	return ResolvePHPWithDiscover(ctx, paths, sys, targetVer, php.Discover)
+}
+
+// ResolvePHPWithDiscover resolves the binary for targetVer using an explicit discovery callback.
+func ResolvePHPWithDiscover(
+	ctx context.Context,
+	paths xdg.Paths,
+	sys sysutil.System,
+	targetVer string,
+	discover func(context.Context, xdg.Paths, sysutil.System) []php.Installation,
+) (version string, binPath string, ok bool) {
 	candidates := PHPBinaryCandidates()
 
-	ver := strings.TrimSpace(cfg.PHPDefault)
-	if ver != "" && ver != "system" && runtime.GOOS != "windows" {
-		compact := strings.ReplaceAll(ver, ".", "")
-		candidates = append([]string{"php-fpm" + ver, "php-fpm" + compact, "php" + ver + "-fpm"}, candidates...)
+	ver := strings.TrimSpace(targetVer)
+	if ver != "" && ver != "system" {
+		if norm, err := php.NormalizeVersion(ver); err == nil {
+			ver = norm
+		}
+		if runtime.GOOS != "windows" {
+			compact := strings.ReplaceAll(ver, ".", "")
+			candidates = append([]string{"php-fpm" + ver, "php-fpm" + compact, "php" + ver + "-fpm"}, candidates...)
+		} else if discover != nil {
+			if installed, found := php.FindVersion(discover(ctx, paths, sys), ver); found && installed.FPM != "" {
+				return ver, installed.FPM, true
+			}
+		}
+	}
+
+	if ver != "" && ver != "system" && runtime.GOOS == "linux" && discover != nil {
+		if installed, found := php.FindVersion(discover(ctx, paths, sys), ver); found && installed.FPM != "" {
+			return ver, installed.FPM, true
+		}
 	}
 
 	binPath, ok = sys.LookBinary(candidates...)
 	if !ok {
+		if discover != nil {
+			if installed := discover(ctx, paths, sys); len(installed) > 0 {
+				for _, inst := range installed {
+					if inst.FPM != "" {
+						return inst.Version, inst.FPM, true
+					}
+				}
+			}
+		}
 		if ver == "" {
 			ver = "system"
 		}
@@ -213,6 +256,29 @@ func ResolvePHPVersion(ctx context.Context, sys sysutil.System, cfg config.Confi
 		}
 	}
 	return "system", binPath, true
+}
+
+// ExtraPHPVersions returns sorted distinct pinned PHP versions from sites.toml excluding skipVer.
+func ExtraPHPVersions(paths xdg.Paths, skipVer string) []string {
+	reg, err := vhost.LoadRegistry(paths.SitesFile())
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var versions []string
+	for _, s := range reg.Sites {
+		if s.Kind != vhost.KindPHP || s.PHP == "" {
+			continue
+		}
+		norm, err := php.NormalizeVersion(s.PHP)
+		if err != nil || norm == "system" || norm == skipVer || seen[norm] {
+			continue
+		}
+		seen[norm] = true
+		versions = append(versions, norm)
+	}
+	sort.Strings(versions)
+	return versions
 }
 
 // ParsePHPVersionOutput extracts major.minor from `php -v` / `php-fpm -v` output (e.g. "8.3").

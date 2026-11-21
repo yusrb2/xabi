@@ -11,15 +11,17 @@ import (
 	"github.com/yusrb2/xabi/internal/cli"
 	"github.com/yusrb2/xabi/internal/config"
 	"github.com/yusrb2/xabi/internal/daemon"
+	"github.com/yusrb2/xabi/internal/php"
 	"github.com/yusrb2/xabi/internal/sysutil"
 	"github.com/yusrb2/xabi/internal/xdg"
 )
 
 // Deps bundles dependencies injected into CLI command handlers.
 type Deps struct {
-	ResolveXDG func() (xdg.Paths, error)
-	Sys        sysutil.System
-	NewDaemon  func(xdg.Paths, config.Config, sysutil.System) daemon.Controller
+	ResolveXDG  func() (xdg.Paths, error)
+	Sys         sysutil.System
+	NewDaemon   func(xdg.Paths, config.Config, sysutil.System) daemon.Controller
+	DiscoverPHP func(context.Context, xdg.Paths, sysutil.System) []php.Installation
 }
 
 var dbDaemonCandidates = []string{"mariadbd", "mysqld"}

@@ -168,39 +168,15 @@ func (m *LocalManager) startNginxPlatform(ctx context.Context) (ActionResult, er
 }
 
 func (m *LocalManager) startPHPFPMPlatform(ctx context.Context) (ActionResult, error) {
-	ver, bin, ok := ResolvePHPVersion(ctx, m.Sys, m.Cfg)
+	ver, bin, ok := ResolvePHPWithDiscover(ctx, m.Paths, m.Sys, m.Cfg.PHPDefault, m.DiscoverPHP)
 	if !ok {
 		return ActionResult{}, errors.New("php-fpm binary not found in PATH")
 	}
 
-	if err := os.MkdirAll(m.Paths.PHPDir(), 0o755); err != nil {
-		return ActionResult{}, fmt.Errorf("create php config dir: %w", err)
-	}
-
-	confPath := PHPFPMConfPath(m.Paths, ver)
 	sockPath := PHPFPMSocketPath(m.Paths, ver)
-	if _, err := os.Stat(confPath); errors.Is(err, os.ErrNotExist) {
-		rendered, err := RenderPHPFPMConf(PHPTemplateData{
-			PIDFile:    filepath.ToSlash(m.Paths.PIDFile(ServicePHPFPM)),
-			ErrorLog:   filepath.ToSlash(m.Paths.LogFile(ServicePHPFPM)),
-			SocketFile: filepath.ToSlash(sockPath),
-		})
-		if err != nil {
-			return ActionResult{}, fmt.Errorf("render php-fpm.conf: %w", err)
-		}
-		if err := sysutil.WriteFileAtomic(confPath, []byte(rendered), 0o644); err != nil {
-			return ActionResult{}, fmt.Errorf("write %s: %w", confPath, err)
-		}
-	}
-
-	out, err := m.Sys.Run(ctx, bin, "-y", confPath, "-D")
+	pid, err := m.startLinuxPHPPool(ctx, ServicePHPFPM, ver, bin, sockPath)
 	if err != nil {
-		return ActionResult{}, formatCmdFailure("start php-fpm", out, err)
-	}
-
-	pid, err := m.waitReady(ctx, ServicePHPFPM, "unix", sockPath, 0)
-	if err != nil {
-		return ActionResult{}, appendLogTail(err, m.Paths.LogFile(ServicePHPFPM))
+		return ActionResult{}, err
 	}
 
 	// Keep default unix:$XDG_RUNTIME_DIR/xabi/php.sock pointing at the active versioned socket.
@@ -209,7 +185,56 @@ func (m *LocalManager) startPHPFPMPlatform(ctx context.Context) (ActionResult, e
 		_ = os.Remove(defaultSock)
 		_ = os.Symlink(filepath.Base(sockPath), defaultSock)
 	}
+
+	for _, extraVer := range ExtraPHPVersions(m.Paths, ver) {
+		extraBin := bin
+		if _, resolved, found := ResolvePHPWithDiscover(ctx, m.Paths, m.Sys, extraVer, m.DiscoverPHP); found {
+			extraBin = resolved
+		}
+		extraSock := PHPFPMSocketPath(m.Paths, extraVer)
+		if _, err := m.startLinuxPHPPool(ctx, ServicePHPFPM+"-"+extraVer, extraVer, extraBin, extraSock); err != nil {
+			return ActionResult{}, err
+		}
+	}
+
 	return ActionResult{Name: ServicePHPFPM, PID: pid, Changed: true, Note: "started"}, nil
+}
+
+func (m *LocalManager) startLinuxPHPPool(ctx context.Context, pidName, ver, bin, sockPath string) (int, error) {
+	if err := os.MkdirAll(m.Paths.PHPDir(), 0o755); err != nil {
+		return 0, fmt.Errorf("create php config dir: %w", err)
+	}
+
+	confPath := filepath.Join(m.Paths.PHPDir(), "php-fpm.conf")
+	if pidName != ServicePHPFPM {
+		confPath = PHPFPMConfPath(m.Paths, ver)
+	}
+	rendered, err := RenderPHPFPMConf(PHPTemplateData{
+		PIDFile:    filepath.ToSlash(m.Paths.PIDFile(pidName)),
+		ErrorLog:   filepath.ToSlash(m.Paths.LogFile(pidName)),
+		SocketFile: filepath.ToSlash(sockPath),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("render php-fpm.conf: %w", err)
+	}
+	existing, statErr := os.ReadFile(confPath)
+	// Always keep main php-fpm.conf synchronized if active PHP version changed; preserve custom extra confs unless missing.
+	if errors.Is(statErr, os.ErrNotExist) || (pidName == ServicePHPFPM && !strings.Contains(string(existing), filepath.ToSlash(sockPath))) {
+		if err := sysutil.WriteFileAtomic(confPath, []byte(rendered), 0o644); err != nil {
+			return 0, fmt.Errorf("write %s: %w", confPath, err)
+		}
+	}
+
+	out, err := m.Sys.Run(ctx, bin, "-y", confPath, "-D")
+	if err != nil {
+		return 0, formatCmdFailure("start "+pidName, out, err)
+	}
+
+	pid, err := m.waitReady(ctx, pidName, "unix", sockPath, 0)
+	if err != nil {
+		return 0, appendLogTail(err, m.Paths.LogFile(pidName))
+	}
+	return pid, nil
 }
 
 func (m *LocalManager) startMariaDBPlatform(ctx context.Context) (ActionResult, error) {
@@ -248,20 +273,37 @@ func (m *LocalManager) startMariaDBPlatform(ctx context.Context) (ActionResult, 
 }
 
 func (m *LocalManager) stopServicePlatform(ctx context.Context, st ServiceStatus) error {
-	if err := m.Proc.SendSignal(st.PID, SigTerm); err != nil {
-		if _, alive := m.Proc.InspectPID(st.PID); alive {
-			return fmt.Errorf("send SIGTERM to %s (pid %d): %w", st.Name, st.PID, err)
+	if err := m.stopLinuxPID(ctx, st.Name, st.PID); err != nil {
+		return err
+	}
+	if st.Name == ServicePHPFPM {
+		for _, pidFile := range m.extraPHPPIDFiles() {
+			if pid, _, valid := readPIDFile(pidFile); valid {
+				if info, alive := m.Proc.InspectPID(pid); alive && m.matchesProcess(ServicePHPFPM, info) {
+					_ = m.stopLinuxPID(ctx, filepath.Base(pidFile), pid)
+				}
+			}
+			_ = os.Remove(pidFile)
+		}
+	}
+	return nil
+}
+
+func (m *LocalManager) stopLinuxPID(ctx context.Context, name string, pid int) error {
+	if err := m.Proc.SendSignal(pid, SigTerm); err != nil {
+		if _, alive := m.Proc.InspectPID(pid); alive {
+			return fmt.Errorf("send SIGTERM to %s (pid %d): %w", name, pid, err)
 		}
 	}
 
-	if !m.waitUntilExited(ctx, st.PID, m.StopTimeout) {
-		if err := m.Proc.SendSignal(st.PID, SigKill); err != nil {
-			if _, alive := m.Proc.InspectPID(st.PID); alive {
-				return fmt.Errorf("send SIGKILL to %s (pid %d): %w", st.Name, st.PID, err)
+	if !m.waitUntilExited(ctx, pid, m.StopTimeout) {
+		if err := m.Proc.SendSignal(pid, SigKill); err != nil {
+			if _, alive := m.Proc.InspectPID(pid); alive {
+				return fmt.Errorf("send SIGKILL to %s (pid %d): %w", name, pid, err)
 			}
 		}
-		if !m.waitUntilExited(ctx, st.PID, 500*time.Millisecond) {
-			return fmt.Errorf("%s (pid %d) failed to exit after SIGKILL", st.Name, st.PID)
+		if !m.waitUntilExited(ctx, pid, 500*time.Millisecond) {
+			return fmt.Errorf("%s (pid %d) failed to exit after SIGKILL", name, pid)
 		}
 	}
 	return nil
@@ -271,11 +313,26 @@ func (m *LocalManager) reloadServicePlatform(_ context.Context, st ServiceStatus
 	sig := SigHup
 	if st.Name == ServicePHPFPM {
 		sig = SigUsr2
+		for _, pidFile := range m.extraPHPPIDFiles() {
+			if pid, _, valid := readPIDFile(pidFile); valid {
+				if info, alive := m.Proc.InspectPID(pid); alive && m.matchesProcess(ServicePHPFPM, info) {
+					_ = m.Proc.SendSignal(pid, sig)
+				}
+			}
+		}
 	}
 	if err := m.Proc.SendSignal(st.PID, sig); err != nil {
 		return ActionResult{}, fmt.Errorf("reload %s (pid %d, %s): %w", st.Name, st.PID, sig, err)
 	}
 	return ActionResult{Name: st.Name, PID: st.PID, Changed: true, Note: "reloaded (" + sig.String() + ")"}, nil
+}
+
+func (m *LocalManager) extraPHPPIDFiles() []string {
+	matches, err := filepath.Glob(filepath.Join(m.Paths.RuntimeDir, "php-fpm-*.pid"))
+	if err != nil {
+		return nil
+	}
+	return matches
 }
 
 func (m *LocalManager) serviceEndpointPlatform(ctx context.Context, svc string) string {
@@ -301,8 +358,11 @@ func (m *LocalManager) cleanupServiceSocketsPlatform(ctx context.Context, svc st
 	switch svc {
 	case ServicePHPFPM:
 		_ = os.Remove(m.Paths.SocketFile("php"))
-		ver, _, _ := ResolvePHPVersion(ctx, m.Sys, m.Cfg)
+		ver, _, _ := ResolvePHPVersionIn(ctx, m.Paths, m.Sys, m.Cfg.PHPDefault)
 		_ = os.Remove(PHPFPMSocketPath(m.Paths, ver))
+		for _, extraVer := range ExtraPHPVersions(m.Paths, ver) {
+			_ = os.Remove(PHPFPMSocketPath(m.Paths, extraVer))
+		}
 	case ServiceMariaDB:
 		_ = os.Remove(m.Paths.SocketFile("mysql"))
 	}

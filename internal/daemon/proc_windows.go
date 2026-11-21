@@ -10,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
 
 	"github.com/yusrb2/xabi/internal/config"
+	"github.com/yusrb2/xabi/internal/php"
 	"github.com/yusrb2/xabi/internal/sysutil"
 )
 
@@ -244,31 +246,51 @@ func (m *LocalManager) startNginxPlatform(ctx context.Context) (ActionResult, er
 }
 
 func (m *LocalManager) startPHPFPMPlatform(ctx context.Context) (ActionResult, error) {
-	_, bin, ok := ResolvePHPVersion(ctx, m.Sys, m.Cfg)
+	_, bin, ok := ResolvePHPWithDiscover(ctx, m.Paths, m.Sys, m.Cfg.PHPDefault, m.DiscoverPHP)
 	if !ok {
 		return ActionResult{}, errors.New("php-cgi.exe not found in PATH")
 	}
 
-	logPath := m.Paths.LogFile(ServicePHPFPM)
-	pidPath := m.Paths.PIDFile(ServicePHPFPM)
-	extraEnv := []string{"PHP_FCGI_CHILDREN=4", "PHP_FCGI_MAX_REQUESTS=1000"}
-	spawnedPID, err := m.StartBackground(bin, []string{"-b", config.WindowsPHPFastCGIAddr}, logPath, extraEnv)
+	pid, err := m.startWindowsPHPPool(ctx, ServicePHPFPM, bin, config.WindowsPHPFastCGIAddr)
 	if err != nil {
-		return ActionResult{}, fmt.Errorf("start php-cgi: %w", err)
+		return ActionResult{}, err
+	}
+
+	for _, extraVer := range ExtraPHPVersions(m.Paths, "") {
+		extraBin := bin
+		if _, resolved, found := ResolvePHPWithDiscover(ctx, m.Paths, m.Sys, extraVer, m.DiscoverPHP); found {
+			extraBin = resolved
+		}
+		addr := fmt.Sprintf("127.0.0.1:%d", php.WindowsPortForVersion(extraVer))
+		if _, err := m.startWindowsPHPPool(ctx, ServicePHPFPM+"-"+extraVer, extraBin, addr); err != nil {
+			return ActionResult{}, err
+		}
+	}
+
+	return ActionResult{Name: ServicePHPFPM, PID: pid, Changed: true, Note: "started"}, nil
+}
+
+func (m *LocalManager) startWindowsPHPPool(ctx context.Context, pidName, bin, addr string) (int, error) {
+	logPath := m.Paths.LogFile(pidName)
+	pidPath := m.Paths.PIDFile(pidName)
+	extraEnv := []string{"PHP_FCGI_CHILDREN=4", "PHP_FCGI_MAX_REQUESTS=1000"}
+	spawnedPID, err := m.StartBackground(bin, []string{"-b", addr}, logPath, extraEnv)
+	if err != nil {
+		return 0, fmt.Errorf("start %s: %w", pidName, err)
 	}
 
 	if err := sysutil.WriteFileAtomic(pidPath, []byte(strconv.Itoa(spawnedPID)+"\n"), 0o644); err != nil {
 		_ = terminateProcessTree(spawnedPID)
-		return ActionResult{}, fmt.Errorf("write %s: %w", pidPath, err)
+		return 0, fmt.Errorf("write %s: %w", pidPath, err)
 	}
 
-	pid, err := m.waitReady(ctx, ServicePHPFPM, "tcp", config.WindowsPHPFastCGIAddr, spawnedPID)
+	pid, err := m.waitReady(ctx, pidName, "tcp", addr, spawnedPID)
 	if err != nil {
 		_ = terminateProcessTree(spawnedPID)
 		_ = os.Remove(pidPath)
-		return ActionResult{}, appendLogTail(err, logPath)
+		return 0, appendLogTail(err, logPath)
 	}
-	return ActionResult{Name: ServicePHPFPM, PID: pid, Changed: true, Note: "started"}, nil
+	return pid, nil
 }
 
 func (m *LocalManager) startMariaDBPlatform(ctx context.Context) (ActionResult, error) {
@@ -323,6 +345,19 @@ func (m *LocalManager) stopServicePlatform(ctx context.Context, st ServiceStatus
 	if !m.waitUntilExited(ctx, st.PID, m.StopTimeout) {
 		return fmt.Errorf("%s (pid %d) failed to exit after termination", st.Name, st.PID)
 	}
+	if st.Name == ServicePHPFPM {
+		if matches, err := filepath.Glob(filepath.Join(m.Paths.RuntimeDir, "php-fpm-*.pid")); err == nil {
+			for _, pidFile := range matches {
+				if pid, _, valid := readPIDFile(pidFile); valid {
+					if info, alive := m.Proc.InspectPID(pid); alive && m.matchesProcess(ServicePHPFPM, info) {
+						_ = m.Proc.SendSignal(pid, SigKill)
+						_ = m.waitUntilExited(ctx, pid, m.StopTimeout)
+					}
+				}
+				_ = os.Remove(pidFile)
+			}
+		}
+	}
 	return nil
 }
 
@@ -355,7 +390,15 @@ func (m *LocalManager) serviceEndpointPlatform(_ context.Context, svc string) st
 	case ServiceNginx:
 		return fmt.Sprintf("127.0.0.1:%d", m.Cfg.Ports.HTTP)
 	case ServicePHPFPM:
-		return config.WindowsPHPFastCGIAddr
+		extras := ExtraPHPVersions(m.Paths, "")
+		if len(extras) == 0 {
+			return config.WindowsPHPFastCGIAddr
+		}
+		var parts []string
+		for _, v := range extras {
+			parts = append(parts, fmt.Sprintf("%s:%d", v, php.WindowsPortForVersion(v)))
+		}
+		return fmt.Sprintf("%s (+%s)", config.WindowsPHPFastCGIAddr, strings.Join(parts, ","))
 	case ServiceMariaDB:
 		return fmt.Sprintf("127.0.0.1:%d", m.Cfg.Ports.DB)
 	default:

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/yusrb2/xabi/internal/config"
+	"github.com/yusrb2/xabi/internal/php"
 	"github.com/yusrb2/xabi/internal/sysutil"
 	"github.com/yusrb2/xabi/internal/xdg"
 )
@@ -47,6 +48,7 @@ type LocalManager struct {
 	Dial            DialFunc
 	StartBackground StartBackgroundFunc
 	MatchProcess    func(service string, info ProcInfo) bool
+	DiscoverPHP     func(context.Context, xdg.Paths, sysutil.System) []php.Installation
 	StopTimeout     time.Duration
 	ReadyTimeout    time.Duration
 	PollInterval    time.Duration
@@ -67,6 +69,7 @@ func NewManager(paths xdg.Paths, cfg config.Config, sys sysutil.System) *LocalMa
 		MatchProcess: func(service string, info ProcInfo) bool {
 			return MatchServiceProcess(service, info.Comm, info.Cmdline)
 		},
+		DiscoverPHP:  php.Discover,
 		StopTimeout:  3 * time.Second,
 		ReadyTimeout: 4 * time.Second,
 		PollInterval: 10 * time.Millisecond,

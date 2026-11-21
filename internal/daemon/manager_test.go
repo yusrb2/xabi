@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/yusrb2/xabi/internal/config"
+	"github.com/yusrb2/xabi/internal/php"
 	"github.com/yusrb2/xabi/internal/sysutil"
+	"github.com/yusrb2/xabi/internal/vhost"
 	"github.com/yusrb2/xabi/internal/xdg"
 )
 
@@ -264,6 +266,7 @@ func TestUpDownRestartLifecycle(t *testing.T) {
 
 	mgr := NewManager(paths, cfg, sys)
 	mgr.Proc = proc
+	mgr.DiscoverPHP = func(_ context.Context, _ xdg.Paths, _ sysutil.System) []php.Installation { return nil }
 	mgr.PollInterval = time.Millisecond
 	mgr.StopTimeout = 15 * time.Millisecond
 	mgr.ReadyTimeout = 200 * time.Millisecond
@@ -451,5 +454,83 @@ func TestRealSubprocessLifecycleAndOrphanRecovery(t *testing.T) {
 
 	if _, alive := mgr.Proc.InspectPID(livePID); alive {
 		t.Errorf("expected live helper PID %d to be terminated", livePID)
+	}
+}
+
+func TestMultiVersionPHPPoolLifecycle(t *testing.T) {
+	paths := testXDGPaths(t)
+	cfg := config.Default()
+	cfg.PHPDefault = "8.3"
+
+	reg := vhost.Registry{
+		Sites: []vhost.Site{
+			{Name: "legacy", Domain: "legacy.test", Kind: vhost.KindPHP, Root: t.TempDir(), PHP: "8.4"},
+		},
+	}
+	if err := vhost.SaveRegistry(paths.SitesFile(), reg); err != nil {
+		t.Fatal(err)
+	}
+
+	proc := newFakeProcOps()
+	sys := &fakeSys{
+		bins: map[string]string{
+			"php-fpm8.3": "/usr/bin/php-fpm8.3",
+			"php-fpm8.4": "/usr/bin/php-fpm8.4",
+			"php-cgi":    `C:\php\php-cgi.exe`,
+		},
+	}
+	sys.onRun = func(name string, args ...string) ([]byte, error) {
+		switch name {
+		case "/usr/bin/php-fpm8.3":
+			_ = os.WriteFile(paths.PIDFile(ServicePHPFPM), []byte("301\n"), 0o644)
+			proc.mu.Lock()
+			proc.procs[301] = stubProcEntry{info: ProcInfo{PID: 301, Comm: "php-fpm", Alive: true}, rss: 1024}
+			proc.mu.Unlock()
+		case "/usr/bin/php-fpm8.4":
+			_ = os.WriteFile(paths.PIDFile(ServicePHPFPM+"-8.4"), []byte("302\n"), 0o644)
+			proc.mu.Lock()
+			proc.procs[302] = stubProcEntry{info: ProcInfo{PID: 302, Comm: "php-fpm", Alive: true}, rss: 1024}
+			proc.mu.Unlock()
+		}
+		return nil, nil
+	}
+
+	var startedAddrs []string
+	mgr := NewManager(paths, cfg, sys)
+	mgr.Proc = proc
+	mgr.DiscoverPHP = func(_ context.Context, _ xdg.Paths, _ sysutil.System) []php.Installation { return nil }
+	mgr.PollInterval = time.Millisecond
+	mgr.StopTimeout = 20 * time.Millisecond
+	mgr.ReadyTimeout = 200 * time.Millisecond
+	mgr.Dial = func(_, addr string, _ time.Duration) error {
+		startedAddrs = append(startedAddrs, addr)
+		return nil
+	}
+	nextPID := 400
+	mgr.StartBackground = func(_ string, args []string, _ string, _ []string) (int, error) {
+		nextPID++
+		pid := nextPID
+		proc.mu.Lock()
+		proc.procs[pid] = stubProcEntry{info: ProcInfo{PID: pid, Comm: "php-cgi.exe", Alive: true}, rss: 1024}
+		proc.mu.Unlock()
+		return pid, nil
+	}
+
+	if _, err := mgr.Up(context.Background(), []string{ServicePHPFPM}); err != nil {
+		t.Fatalf("Up(php-fpm) failed: %v", err)
+	}
+
+	if len(startedAddrs) < 2 {
+		t.Fatalf("expected both default and pinned 8.4 PHP pools to start, got addrs=%v", startedAddrs)
+	}
+	if _, err := os.Stat(paths.PIDFile(ServicePHPFPM + "-8.4")); err != nil {
+		t.Errorf("expected pinned pool pid file php-fpm-8.4.pid: %v", err)
+	}
+
+	if _, err := mgr.Down(context.Background(), []string{ServicePHPFPM}); err != nil {
+		t.Fatalf("Down(php-fpm) failed: %v", err)
+	}
+	if _, err := os.Stat(paths.PIDFile(ServicePHPFPM + "-8.4")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("expected pinned pool pid file php-fpm-8.4.pid to be cleaned up")
 	}
 }

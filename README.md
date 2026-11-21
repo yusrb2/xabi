@@ -60,8 +60,12 @@ Installs `xabi` to `~/.local/bin/xabi` by default (`PREFIX=/usr/local` for syste
 - `xabi open [name]` — Open site URL (`http://` or `https://`) in default browser (auto-detects current directory when `[name]` is omitted).
 - `xabi tls [name] [--off|--disable]` — Issue local trusted certificates via `mkcert`, enable HTTPS + HTTP-to-HTTPS `301` redirect in Nginx, and reload web server.
 
+### Multi-Version PHP
+- `xabi php` — List detected PHP installations, active global version (`*`), and project `.php-version`.
+- `xabi php <version>` *(or `xabi php use <version>`)* — Switch global PHP default in `config.toml`, update symlinks (Linux) or `.cmd` shims (Windows) in `~/.local/share/xabi/bin/`, and refresh running PHP/Nginx services.
+- `xabi php pin <version>` — Write `.php-version` in the current project directory and update its site FastCGI target (`php-<ver>.sock` on Linux, `127.0.0.1:90xx` on Windows). `xabi add` also auto-reads `.php-version` from the project or nearest parent directory.
+
 ### Planned Utilities
-- `xabi php` — Instant PHP version switching & `.php-version` routing
 - `xabi conf`, `xabi log`, `xabi share`, `xabi db`, `xabi completion` — Config editing, raw log tailing, tunneling, DB shell, and shell completion
 
 ## License
