@@ -104,6 +104,12 @@ func MarshalRegistry(reg Registry) string {
 		fmt.Fprintf(&b, "proxy = %q\n", s.Proxy)
 		fmt.Fprintf(&b, "php = %q\n", s.PHP)
 		fmt.Fprintf(&b, "tls = %t\n", s.TLS)
+		if s.CertFile != "" {
+			fmt.Fprintf(&b, "cert_file = %q\n", filepath.ToSlash(s.CertFile))
+		}
+		if s.KeyFile != "" {
+			fmt.Fprintf(&b, "key_file = %q\n", filepath.ToSlash(s.KeyFile))
+		}
 	}
 	return b.String()
 }
@@ -145,7 +151,7 @@ func ParseRegistry(data []byte) (Registry, error) {
 				return Registry{}, fmt.Errorf("sites.toml:%d: invalid tls bool %q", lineNo, val)
 			}
 			cur.TLS = b
-		case "name", "domain", "kind", "root", "proxy", "php":
+		case "name", "domain", "kind", "root", "proxy", "php", "cert_file", "key_file":
 			unquoted, err := strconv.Unquote(val)
 			if err != nil {
 				return Registry{}, fmt.Errorf("sites.toml:%d: %s: %w", lineNo, key, err)
@@ -163,6 +169,10 @@ func ParseRegistry(data []byte) (Registry, error) {
 				cur.Proxy = unquoted
 			case "php":
 				cur.PHP = unquoted
+			case "cert_file":
+				cur.CertFile = filepath.FromSlash(unquoted)
+			case "key_file":
+				cur.KeyFile = filepath.FromSlash(unquoted)
 			}
 		}
 	}

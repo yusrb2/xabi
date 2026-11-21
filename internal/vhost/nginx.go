@@ -48,6 +48,15 @@ func BuildServerTemplateDataForOS(site Site, paths xdg.Paths, cfg config.Config,
 		}
 	}
 
+	certPath := site.CertFile
+	if certPath == "" {
+		certPath = filepath.Join(paths.CertsDir(), site.Domain+".pem")
+	}
+	keyPath := site.KeyFile
+	if keyPath == "" {
+		keyPath = filepath.Join(paths.CertsDir(), site.Domain+"-key.pem")
+	}
+
 	return ServerTemplateData{
 		Domain:    site.Domain,
 		Kind:      site.Kind,
@@ -57,8 +66,8 @@ func BuildServerTemplateDataForOS(site Site, paths xdg.Paths, cfg config.Config,
 		HTTPPort:  cfg.Ports.HTTP,
 		HTTPSPort: cfg.Ports.HTTPS,
 		TLS:       site.TLS,
-		CertPath:  filepath.ToSlash(filepath.Join(paths.CertsDir(), site.Domain+".pem")),
-		KeyPath:   filepath.ToSlash(filepath.Join(paths.CertsDir(), site.Domain+"-key.pem")),
+		CertPath:  filepath.ToSlash(certPath),
+		KeyPath:   filepath.ToSlash(keyPath),
 		IsPHP:     site.Kind == KindPHP,
 		IsStatic:  site.Kind == KindStatic,
 		IsProxy:   site.Kind == KindProxy,

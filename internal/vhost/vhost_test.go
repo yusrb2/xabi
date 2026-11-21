@@ -114,16 +114,23 @@ func TestRenderNginxVHostForwardSlashAndProxyWebSocket(t *testing.T) {
 	}
 
 	proxySite := Site{
-		Name:   "api",
-		Domain: "api.test",
-		Kind:   KindProxy,
-		Proxy:  "http://127.0.0.1:3000",
+		Name:     "api",
+		Domain:   "api.test",
+		Kind:     KindProxy,
+		Proxy:    "http://127.0.0.1:3000",
+		TLS:      true,
+		CertFile: `C:\Users\dev\.config\xabi\certs\api.test.pem`,
+		KeyFile:  `C:\Users\dev\.config\xabi\certs\api.test-key.pem`,
 	}
-	pOut, err := RenderNginxVHost(BuildServerTemplateDataForOS(proxySite, paths, cfg, "linux"))
+	pOut, err := RenderNginxVHost(BuildServerTemplateDataForOS(proxySite, paths, cfg, "windows"))
 	if err != nil {
 		t.Fatalf("RenderNginxVHost(proxy) failed: %v", err)
 	}
 	for _, want := range []string{
+		"return 301 https://$host$request_uri;",
+		"listen 443 ssl;",
+		`ssl_certificate     "C:/Users/dev/.config/xabi/certs/api.test.pem";`,
+		`ssl_certificate_key "C:/Users/dev/.config/xabi/certs/api.test-key.pem";`,
 		"proxy_pass http://127.0.0.1:3000;",
 		"proxy_http_version 1.1;",
 		"proxy_set_header Upgrade $http_upgrade;",
@@ -140,15 +147,19 @@ func TestRegistryRoundTripAndFindByDir(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sites.toml")
 	projectRoot := filepath.Join(t.TempDir(), "blog")
 	laravelPublic := filepath.Join(projectRoot, "public")
+	certFile := filepath.Join(t.TempDir(), "blog.test.pem")
+	keyFile := filepath.Join(t.TempDir(), "blog.test-key.pem")
 
 	reg := Registry{}
 	reg.Upsert(Site{
-		Name:   "blog",
-		Domain: "blog.test",
-		Kind:   KindPHP,
-		Root:   laravelPublic,
-		PHP:    "8.3",
-		TLS:    true,
+		Name:     "blog",
+		Domain:   "blog.test",
+		Kind:     KindPHP,
+		Root:     laravelPublic,
+		PHP:      "8.3",
+		TLS:      true,
+		CertFile: certFile,
+		KeyFile:  keyFile,
 	})
 	if err := SaveRegistry(path, reg); err != nil {
 		t.Fatalf("SaveRegistry failed: %v", err)
@@ -158,7 +169,8 @@ func TestRegistryRoundTripAndFindByDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRegistry failed: %v", err)
 	}
-	if len(loaded.Sites) != 1 || loaded.Sites[0].Domain != "blog.test" || !loaded.Sites[0].TLS {
+	if len(loaded.Sites) != 1 || loaded.Sites[0].Domain != "blog.test" || !loaded.Sites[0].TLS ||
+		loaded.Sites[0].CertFile != certFile || loaded.Sites[0].KeyFile != keyFile {
 		t.Fatalf("unexpected loaded registry: %+v", loaded)
 	}
 

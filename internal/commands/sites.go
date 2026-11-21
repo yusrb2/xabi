@@ -138,6 +138,10 @@ func runAdd(ctx context.Context, args []string, s cli.Streams, deps Deps) int {
 		PHP:    phpVer,
 		TLS:    hadPrev && prevSite.TLS,
 	}
+	if hadPrev {
+		site.CertFile = prevSite.CertFile
+		site.KeyFile = prevSite.KeyFile
+	}
 
 	confPath := vhost.SiteConfPath(paths, domain)
 	prevConf, confErr := os.ReadFile(confPath)
@@ -213,7 +217,7 @@ func runRm(ctx context.Context, args []string, s cli.Streams, deps Deps) int {
 		cli.Error(s.Err, "load sites registry: %v", err)
 		return cli.ExitErr
 	}
-	_, regRemoved := reg.Remove(domain)
+	removedSite, regRemoved := reg.Remove(domain)
 	if regRemoved {
 		if err := vhost.SaveRegistry(regPath, reg); err != nil {
 			cli.Error(s.Err, "save sites registry: %v", err)
@@ -230,7 +234,7 @@ func runRm(ctx context.Context, args []string, s cli.Streams, deps Deps) int {
 		return cli.ExitErr
 	}
 
-	removeSiteCerts(paths, domain)
+	removeSiteCerts(paths, domain, removedSite.CertFile, removedSite.KeyFile)
 
 	hostsRemoved, err := hosts.NewManager(sys.HostsPath()).Remove(domain)
 	if err != nil {
@@ -323,30 +327,10 @@ func runOpen(ctx context.Context, args []string, s cli.Streams, deps Deps) int {
 		return cli.ExitErr
 	}
 
-	var site vhost.Site
-	var found bool
-	if fs.NArg() == 1 {
-		_, domain, err := vhost.NormalizeSiteName(fs.Arg(0), cfg.TLD)
-		if err != nil {
-			cli.Error(s.Err, "%v", err)
-			return cli.ExitErr
-		}
-		site, found = reg.FindByDomain(domain)
-		if !found {
-			cli.Error(s.Err, "site %q is not registered", domain)
-			return cli.ExitErr
-		}
-	} else {
-		cwd, err := os.Getwd()
-		if err != nil {
-			cli.Error(s.Err, "determine working directory: %v", err)
-			return cli.ExitErr
-		}
-		site, found = reg.FindByDir(cwd)
-		if !found {
-			cli.Error(s.Err, "no site registered for directory %s", cwd)
-			return cli.ExitErr
-		}
+	site, err := resolveRegisteredSite(fs.Args(), reg, cfg.TLD)
+	if err != nil {
+		cli.Error(s.Err, "%v", err)
+		return cli.ExitErr
 	}
 
 	targetURL := siteURL(site, cfg)
@@ -410,9 +394,38 @@ func siteURL(site vhost.Site, cfg config.Config) string {
 	return "http://" + site.Domain
 }
 
-func removeSiteCerts(paths xdg.Paths, domain string) {
+func resolveRegisteredSite(args []string, reg vhost.Registry, tld string) (vhost.Site, error) {
+	if len(args) == 1 {
+		_, domain, err := vhost.NormalizeSiteName(args[0], tld)
+		if err != nil {
+			return vhost.Site{}, err
+		}
+		site, found := reg.FindByDomain(domain)
+		if !found {
+			return vhost.Site{}, fmt.Errorf("site %q is not registered", domain)
+		}
+		return site, nil
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return vhost.Site{}, fmt.Errorf("determine working directory: %w", err)
+	}
+	site, found := reg.FindByDir(cwd)
+	if !found {
+		return vhost.Site{}, fmt.Errorf("no site registered for directory %s", cwd)
+	}
+	return site, nil
+}
+
+func removeSiteCerts(paths xdg.Paths, domain string, extra ...string) {
 	for _, suffix := range []string{".pem", "-key.pem", ".crt", ".key"} {
 		_ = os.Remove(filepath.Join(paths.CertsDir(), domain+suffix))
+	}
+	for _, p := range extra {
+		if p != "" {
+			_ = os.Remove(p)
+		}
 	}
 }
 

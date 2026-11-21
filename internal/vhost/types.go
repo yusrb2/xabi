@@ -21,13 +21,15 @@ const (
 
 // Site describes a registered local web project or reverse proxy.
 type Site struct {
-	Name   string
-	Domain string
-	Kind   Kind
-	Root   string
-	Proxy  string
-	PHP    string
-	TLS    bool
+	Name     string
+	Domain   string
+	Kind     Kind
+	Root     string
+	Proxy    string
+	PHP      string
+	TLS      bool
+	CertFile string
+	KeyFile  string
 }
 
 // NormalizeSiteName validates and normalizes a site name (stripping optional .<tld> suffix).

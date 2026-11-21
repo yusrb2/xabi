@@ -42,5 +42,6 @@ func newRouter(ver string, resolveXDG func() (xdg.Paths, error), sys sysutil.Sys
 		commands.NewRmCommand(deps),
 		commands.NewLsCommand(deps),
 		commands.NewOpenCommand(deps),
+		commands.NewTLSCommand(deps),
 	)
 }
