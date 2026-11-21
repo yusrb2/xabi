@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -25,7 +24,8 @@ type ProcInfo struct {
 	Alive   bool
 }
 
-type procOps interface {
+// ProcOps abstracts OS-level process inspection, memory accounting, and signaling.
+type ProcOps interface {
 	InspectPID(pid int) (ProcInfo, bool)
 	TreeRSS(rootPID int) int64
 	SendSignal(pid int, sig Signal) error
@@ -35,17 +35,18 @@ type procOps interface {
 // DialFunc checks whether a network or Unix socket endpoint is accepting connections.
 type DialFunc func(network, address string, timeout time.Duration) error
 
-// StartBackgroundFunc launches a foreground daemon detached in the background (e.g. mariadbd) and returns its PID.
-type StartBackgroundFunc func(bin string, args []string, logPath string) (int, error)
+// StartBackgroundFunc launches a daemon process in the background and returns its PID.
+type StartBackgroundFunc func(bin string, args []string, logPath string, extraEnv []string) (int, error)
 
-// LocalManager orchestrates nginx, php-fpm, and mariadb in user-space.
+// LocalManager orchestrates nginx, php-fpm/php-cgi, and mariadb natively on Linux and Windows.
 type LocalManager struct {
 	Paths           xdg.Paths
 	Cfg             config.Config
 	Sys             sysutil.System
-	Proc            procOps
+	Proc            ProcOps
 	Dial            DialFunc
 	StartBackground StartBackgroundFunc
+	MatchProcess    func(service string, info ProcInfo) bool
 	StopTimeout     time.Duration
 	ReadyTimeout    time.Duration
 	PollInterval    time.Duration
@@ -54,7 +55,7 @@ type LocalManager struct {
 // NewManager creates a LocalManager with production defaults.
 func NewManager(paths xdg.Paths, cfg config.Config, sys sysutil.System) *LocalManager {
 	if sys == nil {
-		sys = sysutil.OS{}
+		sys = sysutil.OS{BinDir: paths.BinDir()}
 	}
 	return &LocalManager{
 		Paths:           paths,
@@ -63,9 +64,12 @@ func NewManager(paths xdg.Paths, cfg config.Config, sys sysutil.System) *LocalMa
 		Proc:            defaultProcOps(),
 		Dial:            defaultDial,
 		StartBackground: defaultStartBackground,
-		StopTimeout:     3 * time.Second,
-		ReadyTimeout:    4 * time.Second,
-		PollInterval:    10 * time.Millisecond,
+		MatchProcess: func(service string, info ProcInfo) bool {
+			return MatchServiceProcess(service, info.Comm, info.Cmdline)
+		},
+		StopTimeout:  3 * time.Second,
+		ReadyTimeout: 4 * time.Second,
+		PollInterval: 10 * time.Millisecond,
 	}
 }
 
@@ -77,7 +81,7 @@ func defaultDial(network, address string, timeout time.Duration) error {
 	return conn.Close()
 }
 
-func defaultStartBackground(bin string, args []string, logPath string) (int, error) {
+func defaultStartBackground(bin string, args []string, logPath string, extraEnv []string) (int, error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return 0, err
 	}
@@ -91,6 +95,9 @@ func defaultStartBackground(bin string, args []string, logPath string) (int, err
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = detachSysProcAttr()
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
@@ -131,7 +138,7 @@ func (m *LocalManager) Down(ctx context.Context, services []string) ([]ActionRes
 	return results, nil
 }
 
-// Restart stops and starts services, or sends a graceful reload signal when reloadOnly is true.
+// Restart stops and starts services, or reloads configuration when reloadOnly is true.
 func (m *LocalManager) Restart(ctx context.Context, services []string, reloadOnly bool) ([]ActionResult, error) {
 	if reloadOnly {
 		results := make([]ActionResult, 0, len(services))
@@ -170,7 +177,7 @@ func (m *LocalManager) inspectService(ctx context.Context, svc string) (ServiceS
 		return ServiceStatus{}, err
 	}
 
-	endpoint := m.serviceEndpoint(ctx, norm)
+	endpoint := m.serviceEndpointPlatform(ctx, norm)
 	pidPath := m.Paths.PIDFile(norm)
 	st := ServiceStatus{
 		Name:     norm,
@@ -184,16 +191,16 @@ func (m *LocalManager) inspectService(ctx context.Context, svc string) (ServiceS
 	}
 	if !valid {
 		_ = os.Remove(pidPath)
-		m.cleanupServiceSockets(ctx, norm)
+		m.cleanupServiceSocketsPlatform(ctx, norm)
 		st.Recovered = true
 		return st, nil
 	}
 
 	m.Proc.ReapIfExited(pid)
 	info, alive := m.Proc.InspectPID(pid)
-	if !alive || !MatchServiceProcess(norm, info.Comm, info.Cmdline) {
+	if !alive || !m.matchesProcess(norm, info) {
 		_ = os.Remove(pidPath)
-		m.cleanupServiceSockets(ctx, norm)
+		m.cleanupServiceSocketsPlatform(ctx, norm)
 		st.Recovered = true
 		return st, nil
 	}
@@ -202,6 +209,13 @@ func (m *LocalManager) inspectService(ctx context.Context, svc string) (ServiceS
 	st.PID = pid
 	st.MemoryRSS = m.Proc.TreeRSS(pid)
 	return st, nil
+}
+
+func (m *LocalManager) matchesProcess(service string, info ProcInfo) bool {
+	if m.MatchProcess != nil {
+		return m.MatchProcess(service, info)
+	}
+	return MatchServiceProcess(service, info.Comm, info.Cmdline)
 }
 
 func (m *LocalManager) startOne(ctx context.Context, svc string) (ActionResult, error) {
@@ -213,119 +227,18 @@ func (m *LocalManager) startOne(ctx context.Context, svc string) (ActionResult, 
 		return ActionResult{Name: st.Name, PID: st.PID, Changed: false, Note: "already running"}, nil
 	}
 
-	m.cleanupServiceSockets(ctx, st.Name)
+	m.cleanupServiceSocketsPlatform(ctx, st.Name)
 
 	switch st.Name {
 	case ServiceNginx:
-		return m.startNginx(ctx)
+		return m.startNginxPlatform(ctx)
 	case ServicePHPFPM:
-		return m.startPHPFPM(ctx)
+		return m.startPHPFPMPlatform(ctx)
 	case ServiceMariaDB:
-		return m.startMariaDB(ctx)
+		return m.startMariaDBPlatform(ctx)
 	default:
 		return ActionResult{}, fmt.Errorf("unsupported service %q", st.Name)
 	}
-}
-
-func (m *LocalManager) startNginx(ctx context.Context) (ActionResult, error) {
-	if _, err := os.Stat(m.Paths.NginxConf()); err != nil {
-		return ActionResult{}, fmt.Errorf("missing %s (run 'xabi init' first): %w", m.Paths.NginxConf(), err)
-	}
-	for _, sub := range []string{"client_body", "proxy", "fastcgi", "uwsgi", "scgi"} {
-		if err := os.MkdirAll(filepath.Join(m.Paths.NginxTempDir(), sub), 0o755); err != nil {
-			return ActionResult{}, fmt.Errorf("prepare nginx temp dir: %w", err)
-		}
-	}
-
-	bin, ok := m.Sys.LookBinary("nginx")
-	if !ok {
-		return ActionResult{}, errors.New("nginx binary not found in PATH")
-	}
-
-	out, err := m.Sys.Run(ctx, bin, "-c", m.Paths.NginxConf(), "-p", m.Paths.RuntimeDir)
-	if err != nil {
-		return ActionResult{}, formatCmdFailure("start nginx", out, err)
-	}
-
-	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(m.Cfg.Ports.HTTP))
-	pid, err := m.waitReady(ctx, ServiceNginx, "tcp", addr, 0)
-	if err != nil {
-		return ActionResult{}, appendLogTail(err, m.Paths.LogFile(ServiceNginx))
-	}
-	return ActionResult{Name: ServiceNginx, PID: pid, Changed: true, Note: "started"}, nil
-}
-
-func (m *LocalManager) startPHPFPM(ctx context.Context) (ActionResult, error) {
-	ver, bin, ok := ResolvePHPVersion(ctx, m.Sys, m.Cfg)
-	if !ok {
-		return ActionResult{}, errors.New("php-fpm binary not found in PATH")
-	}
-
-	if err := os.MkdirAll(m.Paths.PHPDir(), 0o755); err != nil {
-		return ActionResult{}, fmt.Errorf("create php config dir: %w", err)
-	}
-
-	confPath := PHPFPMConfPath(m.Paths, ver)
-	sockPath := PHPFPMSocketPath(m.Paths, ver)
-	if _, err := os.Stat(confPath); errors.Is(err, os.ErrNotExist) {
-		rendered, err := RenderPHPFPMConf(PHPTemplateData{
-			PIDFile:    filepath.ToSlash(m.Paths.PIDFile(ServicePHPFPM)),
-			ErrorLog:   filepath.ToSlash(m.Paths.LogFile(ServicePHPFPM)),
-			SocketFile: filepath.ToSlash(sockPath),
-		})
-		if err != nil {
-			return ActionResult{}, fmt.Errorf("render php-fpm.conf: %w", err)
-		}
-		if err := sysutil.WriteFileAtomic(confPath, []byte(rendered), 0o644); err != nil {
-			return ActionResult{}, fmt.Errorf("write %s: %w", confPath, err)
-		}
-	}
-
-	out, err := m.Sys.Run(ctx, bin, "-y", confPath, "-D")
-	if err != nil {
-		return ActionResult{}, formatCmdFailure("start php-fpm", out, err)
-	}
-
-	pid, err := m.waitReady(ctx, ServicePHPFPM, "unix", sockPath, 0)
-	if err != nil {
-		return ActionResult{}, appendLogTail(err, m.Paths.LogFile(ServicePHPFPM))
-	}
-	return ActionResult{Name: ServicePHPFPM, PID: pid, Changed: true, Note: "started"}, nil
-}
-
-func (m *LocalManager) startMariaDB(ctx context.Context) (ActionResult, error) {
-	dbDir := m.Paths.DBDir()
-	if _, err := os.Stat(filepath.Join(dbDir, "mysql")); err != nil {
-		return ActionResult{}, fmt.Errorf("mariadb data dir not initialized at %s (run 'xabi init' first)", dbDir)
-	}
-
-	bin, ok := m.Sys.LookBinary("mariadbd", "mysqld")
-	if !ok {
-		return ActionResult{}, errors.New("mariadbd/mysqld binary not found in PATH")
-	}
-
-	sockPath := m.Paths.SocketFile("mysql")
-	pidPath := m.Paths.PIDFile(ServiceMariaDB)
-	logPath := m.Paths.LogFile(ServiceMariaDB)
-
-	args := []string{
-		"--datadir=" + dbDir,
-		"--socket=" + sockPath,
-		"--pid-file=" + pidPath,
-		"--port=" + strconv.Itoa(m.Cfg.Ports.DB),
-		"--log-error=" + logPath,
-	}
-
-	spawnedPID, err := m.StartBackground(bin, args, logPath)
-	if err != nil {
-		return ActionResult{}, fmt.Errorf("start mariadb: %w", err)
-	}
-
-	pid, err := m.waitReady(ctx, ServiceMariaDB, "unix", sockPath, spawnedPID)
-	if err != nil {
-		return ActionResult{}, appendLogTail(err, logPath)
-	}
-	return ActionResult{Name: ServiceMariaDB, PID: pid, Changed: true, Note: "started"}, nil
 }
 
 func (m *LocalManager) stopOne(ctx context.Context, svc string) (ActionResult, error) {
@@ -334,29 +247,16 @@ func (m *LocalManager) stopOne(ctx context.Context, svc string) (ActionResult, e
 		return ActionResult{}, err
 	}
 	if st.State == StateStopped {
-		m.cleanupServiceSockets(ctx, st.Name)
+		m.cleanupServiceSocketsPlatform(ctx, st.Name)
 		return ActionResult{Name: st.Name, Changed: false, Note: "already stopped"}, nil
 	}
 
-	if err := m.Proc.SendSignal(st.PID, SigTerm); err != nil {
-		if _, alive := m.Proc.InspectPID(st.PID); alive {
-			return ActionResult{}, fmt.Errorf("send SIGTERM to %s (pid %d): %w", st.Name, st.PID, err)
-		}
-	}
-
-	if !m.waitUntilExited(ctx, st.PID, m.StopTimeout) {
-		if err := m.Proc.SendSignal(st.PID, SigKill); err != nil {
-			if _, alive := m.Proc.InspectPID(st.PID); alive {
-				return ActionResult{}, fmt.Errorf("send SIGKILL to %s (pid %d): %w", st.Name, st.PID, err)
-			}
-		}
-		if !m.waitUntilExited(ctx, st.PID, 500*time.Millisecond) {
-			return ActionResult{}, fmt.Errorf("%s (pid %d) failed to exit after SIGKILL", st.Name, st.PID)
-		}
+	if err := m.stopServicePlatform(ctx, st); err != nil {
+		return ActionResult{}, err
 	}
 
 	_ = os.Remove(m.Paths.PIDFile(st.Name))
-	m.cleanupServiceSockets(ctx, st.Name)
+	m.cleanupServiceSocketsPlatform(ctx, st.Name)
 	return ActionResult{Name: st.Name, PID: st.PID, Changed: true, Note: "stopped"}, nil
 }
 
@@ -368,15 +268,7 @@ func (m *LocalManager) reloadOne(ctx context.Context, svc string) (ActionResult,
 	if st.State == StateStopped {
 		return m.startOne(ctx, st.Name)
 	}
-
-	sig := SigHup
-	if st.Name == ServicePHPFPM {
-		sig = SigUsr2
-	}
-	if err := m.Proc.SendSignal(st.PID, sig); err != nil {
-		return ActionResult{}, fmt.Errorf("reload %s (pid %d, %s): %w", st.Name, st.PID, sig, err)
-	}
-	return ActionResult{Name: st.Name, PID: st.PID, Changed: true, Note: "reloaded (" + sig.String() + ")"}, nil
+	return m.reloadServicePlatform(ctx, st)
 }
 
 func (m *LocalManager) waitReady(ctx context.Context, svc, network, address string, knownPID int) (int, error) {
@@ -398,7 +290,7 @@ func (m *LocalManager) waitReady(ctx context.Context, svc, network, address stri
 
 		if pid > 0 {
 			info, alive := m.Proc.InspectPID(pid)
-			if alive && MatchServiceProcess(svc, info.Comm, info.Cmdline) {
+			if alive && m.matchesProcess(svc, info) {
 				if err := m.Dial(network, address, 20*time.Millisecond); err == nil {
 					return pid, nil
 				}
@@ -436,35 +328,6 @@ func (m *LocalManager) waitUntilExited(ctx context.Context, pid int, timeout tim
 			return false
 		case <-timer.C:
 		}
-	}
-}
-
-func (m *LocalManager) serviceEndpoint(ctx context.Context, svc string) string {
-	switch svc {
-	case ServiceNginx:
-		return fmt.Sprintf("127.0.0.1:%d", m.Cfg.Ports.HTTP)
-	case ServicePHPFPM:
-		if m.Cfg.PHPDefault == "" || m.Cfg.PHPDefault == "system" {
-			if matches, err := filepath.Glob(filepath.Join(m.Paths.RuntimeDir, "php-*.sock")); err == nil && len(matches) > 0 {
-				return "unix:" + filepath.ToSlash(matches[0])
-			}
-		}
-		ver, _, _ := ResolvePHPVersion(ctx, m.Sys, m.Cfg)
-		return "unix:" + filepath.ToSlash(PHPFPMSocketPath(m.Paths, ver))
-	case ServiceMariaDB:
-		return fmt.Sprintf("127.0.0.1:%d", m.Cfg.Ports.DB)
-	default:
-		return "-"
-	}
-}
-
-func (m *LocalManager) cleanupServiceSockets(ctx context.Context, svc string) {
-	switch svc {
-	case ServicePHPFPM:
-		ver, _, _ := ResolvePHPVersion(ctx, m.Sys, m.Cfg)
-		_ = os.Remove(PHPFPMSocketPath(m.Paths, ver))
-	case ServiceMariaDB:
-		_ = os.Remove(m.Paths.SocketFile("mysql"))
 	}
 }
 

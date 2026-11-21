@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -46,11 +47,16 @@ func TestWriteFileAtomicAndDirWritable(t *testing.T) {
 	}
 }
 
-func TestCheckHostsFile(t *testing.T) {
+func TestCheckHostsFileAndEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	hosts := filepath.Join(dir, "hosts")
 	if err := os.WriteFile(hosts, []byte("127.0.0.1 localhost\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	t.Setenv("XABI_HOSTS_FILE", hosts)
+	if got := (OS{}).HostsPath(); got != hosts {
+		t.Errorf("HostsPath() = %q, want %q", got, hosts)
 	}
 
 	st := checkHostsFile(hosts)
@@ -61,5 +67,26 @@ func TestCheckHostsFile(t *testing.T) {
 	missing := checkHostsFile(filepath.Join(dir, "nonexistent"))
 	if missing.Exists || missing.Readable || missing.Writable {
 		t.Errorf("expected missing file status false, got %+v", missing)
+	}
+}
+
+func TestLookBinaryFromLocalBinDir(t *testing.T) {
+	binDir := t.TempDir()
+	name := "fakebin"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	target := filepath.Join(binDir, name)
+	if err := os.WriteFile(target, []byte("dummy"), 0o755); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	sys := OS{BinDir: binDir}
+	found, ok := sys.LookBinary("fakebin")
+	if !ok {
+		t.Fatal("expected LookBinary to find local binDir executable")
+	}
+	if found != target {
+		t.Errorf("LookBinary = %q, want %q", found, target)
 	}
 }

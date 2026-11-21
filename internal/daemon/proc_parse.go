@@ -78,7 +78,8 @@ func MatchServiceProcess(service, comm, cmdline string) bool {
 		return strings.Contains(c, "nginx") || strings.Contains(cmd, "nginx")
 	case ServicePHPFPM:
 		return strings.Contains(c, "php-fpm") || strings.Contains(cmd, "php-fpm") ||
-			(strings.Contains(c, "php") && strings.Contains(cmd, "fpm"))
+			strings.Contains(c, "php-cgi") || strings.Contains(cmd, "php-cgi") ||
+			(strings.Contains(c, "php") && (strings.Contains(cmd, "fpm") || strings.Contains(cmd, "cgi")))
 	case ServiceMariaDB:
 		return strings.Contains(c, "mariadbd") || strings.Contains(c, "mysqld") ||
 			strings.Contains(cmd, "mariadbd") || strings.Contains(cmd, "mysqld")

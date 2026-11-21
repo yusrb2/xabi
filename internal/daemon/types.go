@@ -1,4 +1,4 @@
-// Package daemon manages user-space service processes, PID tracking, readiness probes, and /proc inspection.
+// Package daemon manages user-space service processes, PID tracking, readiness probes, and OS inspection.
 package daemon
 
 import (
@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/template"
 
@@ -81,12 +82,12 @@ type Controller interface {
 	Status(ctx context.Context, services []string) ([]ServiceStatus, error)
 }
 
-// NormalizeService maps user aliases (e.g. "php", "mysql", "mysqld") to canonical names.
+// NormalizeService maps user aliases (e.g. "php", "php-cgi", "mysql", "mysqld") to canonical names.
 func NormalizeService(name string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "nginx":
 		return ServiceNginx, nil
-	case "php-fpm", "php", "phpfpm":
+	case "php-fpm", "php", "phpfpm", "php-cgi", "phpcgi":
 		return ServicePHPFPM, nil
 	case "mariadb", "mariadbd", "mysql", "mysqld":
 		return ServiceMariaDB, nil
@@ -119,6 +120,18 @@ func ResolveServices(cfg config.Config, requested []string) ([]string, error) {
 		out = append(out, norm)
 	}
 	return out, nil
+}
+
+// PHPBinaryCandidates returns platform-appropriate PHP FastCGI / FPM executable candidates.
+func PHPBinaryCandidates() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"php-cgi", "php-fpm"}
+	}
+	return []string{
+		"php-fpm",
+		"php-fpm8.4", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1",
+		"php-fpm84", "php-fpm83", "php-fpm82", "php-fpm81",
+	}
 }
 
 // PHPTemplateData holds paths interpolated into user-space php-fpm.conf.
@@ -165,22 +178,18 @@ func PHPFPMConfPath(paths xdg.Paths, version string) string {
 
 // PHPFPMSocketPath returns the Unix domain socket path for a given PHP version tag.
 func PHPFPMSocketPath(paths xdg.Paths, version string) string {
-	if version == "" {
-		version = "system"
+	if version == "" || version == "system" {
+		return paths.SocketFile("php")
 	}
 	return paths.SocketFile("php-" + version)
 }
 
-// ResolvePHPVersion determines the active PHP version tag for socket naming.
+// ResolvePHPVersion determines the active PHP version tag and binary path.
 func ResolvePHPVersion(ctx context.Context, sys sysutil.System, cfg config.Config) (version string, binPath string, ok bool) {
-	candidates := []string{
-		"php-fpm",
-		"php-fpm8.4", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1",
-		"php-fpm84", "php-fpm83", "php-fpm82", "php-fpm81",
-	}
+	candidates := PHPBinaryCandidates()
 
 	ver := strings.TrimSpace(cfg.PHPDefault)
-	if ver != "" && ver != "system" {
+	if ver != "" && ver != "system" && runtime.GOOS != "windows" {
 		compact := strings.ReplaceAll(ver, ".", "")
 		candidates = append([]string{"php-fpm" + ver, "php-fpm" + compact, "php" + ver + "-fpm"}, candidates...)
 	}
@@ -206,7 +215,7 @@ func ResolvePHPVersion(ctx context.Context, sys sysutil.System, cfg config.Confi
 	return "system", binPath, true
 }
 
-// ParsePHPVersionOutput extracts major.minor from `php-fpm -v` output (e.g. "8.3").
+// ParsePHPVersionOutput extracts major.minor from `php -v` / `php-fpm -v` output (e.g. "8.3").
 func ParsePHPVersionOutput(out string) string {
 	for _, field := range strings.Fields(out) {
 		parts := strings.Split(field, ".")

@@ -11,6 +11,16 @@ import (
 	"syscall"
 )
 
+func expandBinaryCandidates(candidates []string) []string {
+	out := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func extraBinDirs() []string {
 	return []string{"/usr/sbin", "/sbin", "/usr/local/sbin"}
 }
@@ -87,4 +97,9 @@ func setNetBindCap(ctx context.Context, sys System, binPath string) error {
 
 func isRoot() bool {
 	return os.Geteuid() == 0
+}
+
+// HiddenSysProcAttr returns nil on Linux.
+func HiddenSysProcAttr() *syscall.SysProcAttr {
+	return nil
 }

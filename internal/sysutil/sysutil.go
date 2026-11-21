@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/yusrb2/xabi/internal/xdg"
 )
 
 // PortStatus describes whether a local TCP port is currently occupied.
@@ -51,23 +53,37 @@ type System interface {
 }
 
 // OS implements System using real host OS calls.
-type OS struct{}
+type OS struct {
+	BinDir string
+}
 
-// LookBinary locates the first available executable among candidates in PATH or sbin dirs.
-func (OS) LookBinary(candidates ...string) (string, bool) {
-	for _, name := range candidates {
-		if name == "" {
-			continue
+// LookBinary locates the first available executable among candidates in user BinDir, PATH, or sbin dirs.
+func (o OS) LookBinary(candidates ...string) (string, bool) {
+	expanded := expandBinaryCandidates(candidates)
+
+	binDir := o.BinDir
+	if binDir == "" {
+		if paths, err := xdg.Resolve(); err == nil {
+			binDir = paths.BinDir()
 		}
+	}
+	if binDir != "" {
+		for _, name := range expanded {
+			full := filepath.Join(binDir, name)
+			if isExecutableFile(full) {
+				return full, true
+			}
+		}
+	}
+
+	for _, name := range expanded {
 		if p, err := exec.LookPath(name); err == nil {
 			return p, true
 		}
 	}
+
 	for _, dir := range extraBinDirs() {
-		for _, name := range candidates {
-			if name == "" {
-				continue
-			}
+		for _, name := range expanded {
 			full := filepath.Join(dir, name)
 			if isExecutableFile(full) {
 				return full, true
@@ -84,7 +100,9 @@ func (OS) EvalSymlinks(path string) (string, error) {
 
 // Run executes an external command and returns combined stdout/stderr output.
 func (OS) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = HiddenSysProcAttr()
+	return cmd.CombinedOutput()
 }
 
 // CheckPort probes whether a local TCP port is already accepting connections or bound.
@@ -97,8 +115,16 @@ func (OS) CheckHosts(path string) HostsStatus {
 	return checkHostsFile(path)
 }
 
-// HostsPath returns the default OS hosts file path.
+// HostsPath returns the resolved OS hosts file path, honoring XABI_HOSTS_FILE for testing.
 func (OS) HostsPath() string {
+	return ResolveHostsPath()
+}
+
+// ResolveHostsPath returns XABI_HOSTS_FILE if set, otherwise the OS default hosts file path.
+func ResolveHostsPath() string {
+	if override := strings.TrimSpace(os.Getenv("XABI_HOSTS_FILE")); override != "" {
+		return override
+	}
 	return defaultHostsPath()
 }
 

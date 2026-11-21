@@ -22,12 +22,6 @@ type Deps struct {
 	NewDaemon  func(xdg.Paths, config.Config, sysutil.System) daemon.Controller
 }
 
-var phpFPMBinCandidates = []string{
-	"php-fpm",
-	"php-fpm8.4", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1",
-	"php-fpm84", "php-fpm83", "php-fpm82", "php-fpm81",
-}
-
 var dbDaemonCandidates = []string{"mariadbd", "mysqld"}
 var dbInitCandidates = []string{"mariadb-install-db", "mysql_install_db"}
 
@@ -300,11 +294,12 @@ func initMKCert(ctx context.Context, sys sysutil.System, dryRun bool, s cli.Stre
 }
 
 func reportPHPFPM(sys sysutil.System, s cli.Streams) {
-	if phpBin, ok := sys.LookBinary(phpFPMBinCandidates...); ok {
-		cli.Info(s.Out, "detected php-fpm at %s", phpBin)
+	candidates := daemon.PHPBinaryCandidates()
+	if phpBin, ok := sys.LookBinary(candidates...); ok {
+		cli.Info(s.Out, "detected php runtime at %s", phpBin)
 		return
 	}
-	cli.Warn(s.Err, "php-fpm not found in PATH")
+	cli.Warn(s.Err, "%s not found in PATH", candidates[0])
 }
 
 func fileExists(path string) bool {

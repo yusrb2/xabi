@@ -3,10 +3,14 @@ package config
 import (
 	"bytes"
 	"path/filepath"
+	"runtime"
 	"text/template"
 
 	"github.com/yusrb2/xabi/internal/xdg"
 )
+
+// WindowsPHPFastCGIAddr is the default TCP loopback address for Windows php-cgi.
+const WindowsPHPFastCGIAddr = "127.0.0.1:9000"
 
 // NginxTemplateData holds paths and ports interpolated into the user-space nginx.conf.
 type NginxTemplateData struct {
@@ -16,11 +20,21 @@ type NginxTemplateData struct {
 	MimeTypes    string
 	NginxTempDir string
 	SitesGlob    string
+	PHPFastCGI   string
 	HTTPPort     int
 }
 
-// NewNginxTemplateData builds NginxTemplateData from XDG paths and an HTTP port.
+// NewNginxTemplateData builds NginxTemplateData for the current runtime OS.
 func NewNginxTemplateData(paths xdg.Paths, httpPort int) NginxTemplateData {
+	return NewNginxTemplateDataForOS(paths, httpPort, runtime.GOOS)
+}
+
+// NewNginxTemplateDataForOS builds NginxTemplateData targeting the given GOOS.
+func NewNginxTemplateDataForOS(paths xdg.Paths, httpPort int, goos string) NginxTemplateData {
+	phpUpstream := "unix:" + filepath.ToSlash(paths.SocketFile("php"))
+	if goos == "windows" {
+		phpUpstream = WindowsPHPFastCGIAddr
+	}
 	return NginxTemplateData{
 		PIDFile:      filepath.ToSlash(paths.PIDFile("nginx")),
 		ErrorLog:     filepath.ToSlash(paths.LogFile("nginx")),
@@ -28,6 +42,7 @@ func NewNginxTemplateData(paths xdg.Paths, httpPort int) NginxTemplateData {
 		MimeTypes:    filepath.ToSlash(filepath.Join(paths.NginxDir(), "mime.types")),
 		NginxTempDir: filepath.ToSlash(paths.NginxTempDir()),
 		SitesGlob:    filepath.ToSlash(filepath.Join(paths.SitesDir(), "*.conf")),
+		PHPFastCGI:   phpUpstream,
 		HTTPPort:     httpPort,
 	}
 }
@@ -61,6 +76,10 @@ http {
     fastcgi_temp_path     {{.NginxTempDir}}/fastcgi;
     uwsgi_temp_path       {{.NginxTempDir}}/uwsgi;
     scgi_temp_path        {{.NginxTempDir}}/scgi;
+
+    upstream xabi_php {
+        server {{.PHPFastCGI}};
+    }
 
     server {
         listen {{.HTTPPort}} default_server;

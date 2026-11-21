@@ -109,7 +109,7 @@ func TestRenderNginxConf(t *testing.T) {
 		RuntimeDir: "/run/user/1000/xabi",
 	}
 
-	rendered, err := RenderNginxConf(NewNginxTemplateData(paths, 80))
+	rendered, err := RenderNginxConf(NewNginxTemplateDataForOS(paths, 80, "linux"))
 	if err != nil {
 		t.Fatalf("RenderNginxConf failed: %v", err)
 	}
@@ -121,11 +121,20 @@ func TestRenderNginxConf(t *testing.T) {
 		"client_body_temp_path /run/user/1000/xabi/nginx/client_body;",
 		"proxy_temp_path       /run/user/1000/xabi/nginx/proxy;",
 		"fastcgi_temp_path     /run/user/1000/xabi/nginx/fastcgi;",
+		"server unix:/run/user/1000/xabi/php.sock;",
 		"listen 80 default_server;",
 		"include /home/alice/.config/xabi/nginx/sites/*.conf;",
 	} {
 		if !strings.Contains(rendered, want) {
-			t.Errorf("nginx.conf missing %q", want)
+			t.Errorf("linux nginx.conf missing %q", want)
 		}
+	}
+
+	winRendered, err := RenderNginxConf(NewNginxTemplateDataForOS(paths, 80, "windows"))
+	if err != nil {
+		t.Fatalf("RenderNginxConf(windows) failed: %v", err)
+	}
+	if !strings.Contains(winRendered, "server 127.0.0.1:9000;") {
+		t.Errorf("windows nginx.conf missing 127.0.0.1:9000 upstream:\n%s", winRendered)
 	}
 }

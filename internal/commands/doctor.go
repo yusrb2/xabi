@@ -8,6 +8,7 @@ import (
 
 	"github.com/yusrb2/xabi/internal/cli"
 	"github.com/yusrb2/xabi/internal/config"
+	"github.com/yusrb2/xabi/internal/daemon"
 	"github.com/yusrb2/xabi/internal/sysutil"
 	"github.com/yusrb2/xabi/internal/xdg"
 )
@@ -129,9 +130,10 @@ func checkBinaries(sys sysutil.System, cfg config.Config, record func(checkStatu
 		webBins = []string{"caddy"}
 	}
 
+	phpBins := daemon.PHPBinaryCandidates()
 	checks := []binCheck{
 		{label: cfg.WebServer, candidates: webBins, required: true, note: "required web server"},
-		{label: "php-fpm", candidates: phpFPMBinCandidates, required: false, note: "needed for PHP sites"},
+		{label: phpBins[0], candidates: phpBins, required: false, note: "needed for PHP sites"},
 		{label: "mariadb/mysql", candidates: dbDaemonCandidates, required: false, note: "needed for local DB"},
 		{label: "mkcert", candidates: []string{"mkcert"}, required: false, note: "needed for 'xabi tls'"},
 		{label: "cloudflared", candidates: []string{"cloudflared"}, required: false, note: "needed for 'xabi share'"},
