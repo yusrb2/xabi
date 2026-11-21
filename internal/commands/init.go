@@ -10,6 +10,7 @@ import (
 
 	"github.com/yusrb2/xabi/internal/cli"
 	"github.com/yusrb2/xabi/internal/config"
+	"github.com/yusrb2/xabi/internal/daemon"
 	"github.com/yusrb2/xabi/internal/sysutil"
 	"github.com/yusrb2/xabi/internal/xdg"
 )
@@ -18,6 +19,7 @@ import (
 type Deps struct {
 	ResolveXDG func() (xdg.Paths, error)
 	Sys        sysutil.System
+	NewDaemon  func(xdg.Paths, config.Config, sysutil.System) daemon.Controller
 }
 
 var phpFPMBinCandidates = []string{
