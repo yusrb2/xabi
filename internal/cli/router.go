@@ -110,6 +110,52 @@ func NewFlagSet(name string, s Streams) *flag.FlagSet {
 	return fs
 }
 
+// ParseFlags parses flags even when interspersed with positional arguments (e.g. `xabi add app --proxy 3000`).
+func ParseFlags(fs *flag.FlagSet, args []string) error {
+	type boolChecker interface {
+		IsBoolFlag() bool
+	}
+
+	var flags []string
+	var pos []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			pos = append(pos, args[i:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			pos = append(pos, arg)
+			continue
+		}
+
+		name := strings.TrimLeft(arg, "-")
+		hasEq := false
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			name = name[:eq]
+			hasEq = true
+		}
+
+		flags = append(flags, arg)
+		if hasEq {
+			continue
+		}
+		f := fs.Lookup(name)
+		if f == nil {
+			continue
+		}
+		if bc, ok := f.Value.(boolChecker); ok && bc.IsBoolFlag() {
+			continue
+		}
+		if i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+
+	return fs.Parse(append(flags, pos...))
+}
+
 func (r *Router) printCommandHelp(name string, s Streams) int {
 	cmd, ok := r.lookup[name]
 	if !ok {

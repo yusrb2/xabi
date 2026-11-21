@@ -49,6 +49,7 @@ type System interface {
 	HostsPath() string
 	CheckNetBindCap(binPath string) CapStatus
 	SetNetBindCap(ctx context.Context, binPath string) error
+	OpenURL(ctx context.Context, url string) error
 	IsRoot() bool
 }
 
@@ -141,6 +142,11 @@ func (o OS) SetNetBindCap(ctx context.Context, binPath string) error {
 // IsRoot reports whether the current process is running as root (UID 0).
 func (OS) IsRoot() bool {
 	return isRoot()
+}
+
+// OpenURL opens url in the user's default system browser.
+func (OS) OpenURL(ctx context.Context, url string) error {
+	return openURL(ctx, url)
 }
 
 // CheckPort performs a millisecond TCP loopback probe (and unprivileged Listen check for ports >= 1024).

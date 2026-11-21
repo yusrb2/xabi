@@ -100,3 +100,20 @@ func TestRouterDispatchAliasAndErrors(t *testing.T) {
 		t.Errorf("stderr = %q, want unknown flag message", errBuf.String())
 	}
 }
+
+func TestParseFlagsInterspersed(t *testing.T) {
+	s, _, _ := testStreams()
+	fs := NewFlagSet("add", s)
+	proxy := fs.String("proxy", "", "proxy target")
+	tlsFlag := fs.Bool("tls", false, "enable tls")
+
+	if err := ParseFlags(fs, []string{"myapp", "--proxy", "3000", "--tls"}); err != nil {
+		t.Fatalf("ParseFlags failed: %v", err)
+	}
+	if *proxy != "3000" || !*tlsFlag {
+		t.Errorf("unexpected parsed flags: proxy=%q tls=%v", *proxy, *tlsFlag)
+	}
+	if fs.NArg() != 1 || fs.Arg(0) != "myapp" {
+		t.Errorf("unexpected positional args: %v", fs.Args())
+	}
+}

@@ -95,6 +95,11 @@ func (p Paths) SitesDir() string {
 	return filepath.Join(p.NginxDir(), "sites")
 }
 
+// SitesFile returns the path to the registered sites metadata file.
+func (p Paths) SitesFile() string {
+	return filepath.Join(p.ConfigDir, "sites.toml")
+}
+
 // CertsDir returns the directory holding generated local TLS certificates.
 func (p Paths) CertsDir() string {
 	return filepath.Join(p.ConfigDir, "certs")

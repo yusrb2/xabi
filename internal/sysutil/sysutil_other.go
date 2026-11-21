@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"syscall"
 )
 
@@ -72,4 +73,9 @@ func isRoot() bool {
 // HiddenSysProcAttr returns nil on non-Windows Unix systems.
 func HiddenSysProcAttr() *syscall.SysProcAttr {
 	return nil
+}
+
+func openURL(ctx context.Context, url string) error {
+	cmd := exec.CommandContext(ctx, "open", url)
+	return cmd.Start()
 }

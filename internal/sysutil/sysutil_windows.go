@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -95,4 +96,10 @@ func isRoot() bool {
 // HiddenSysProcAttr suppresses console popups for child tools on Windows.
 func HiddenSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{HideWindow: true}
+}
+
+func openURL(ctx context.Context, url string) error {
+	cmd := exec.CommandContext(ctx, "rundll32.exe", "url.dll,FileProtocolHandler", url)
+	cmd.SysProcAttr = HiddenSysProcAttr()
+	return cmd.Start()
 }

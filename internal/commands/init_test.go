@@ -30,6 +30,7 @@ type fakeSystem struct {
 	runErrByBin map[string]error
 	calls       []fakeCall
 	setCapCalls []string
+	openedURLs  []string
 }
 
 func (f *fakeSystem) LookBinary(candidates ...string) (string, bool) {
@@ -82,6 +83,11 @@ func (f *fakeSystem) SetNetBindCap(_ context.Context, binPath string) error {
 
 func (f *fakeSystem) IsRoot() bool {
 	return false
+}
+
+func (f *fakeSystem) OpenURL(_ context.Context, url string) error {
+	f.openedURLs = append(f.openedURLs, url)
+	return nil
 }
 
 func testXDGResolver(t *testing.T) (xdg.Paths, func() (xdg.Paths, error)) {

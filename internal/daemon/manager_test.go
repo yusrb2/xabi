@@ -115,6 +115,7 @@ func (f *fakeSys) CheckHosts(path string) sysutil.HostsStatus      { return sysu
 func (f *fakeSys) HostsPath() string                               { return "/etc/hosts" }
 func (f *fakeSys) CheckNetBindCap(_ string) sysutil.CapStatus      { return sysutil.CapStatus{} }
 func (f *fakeSys) SetNetBindCap(_ context.Context, _ string) error { return nil }
+func (f *fakeSys) OpenURL(_ context.Context, _ string) error       { return nil }
 func (f *fakeSys) IsRoot() bool                                    { return false }
 func (f *fakeSys) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, append([]string{name}, args...))

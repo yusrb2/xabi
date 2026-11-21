@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"syscall"
 )
@@ -102,4 +103,13 @@ func isRoot() bool {
 // HiddenSysProcAttr returns nil on Linux.
 func HiddenSysProcAttr() *syscall.SysProcAttr {
 	return nil
+}
+
+func openURL(ctx context.Context, url string) error {
+	bin, err := exec.LookPath("xdg-open")
+	if err != nil {
+		return errors.New("xdg-open not found in PATH")
+	}
+	cmd := exec.CommandContext(ctx, bin, url)
+	return cmd.Start()
 }
