@@ -1,0 +1,18 @@
+# Compiled binaries and build artifacts
+/xabi
+/xabi.exe
+/bin/
+/dist/
+*.exe
+*.out
+*.test
+*.prof
+
+# Local temporary files
+.tmp/
+
+# OS and editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
