@@ -2,6 +2,7 @@ package php
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -29,7 +30,10 @@ func (s *stubPHPSys) HostsPath() string                               { return "
 func (s *stubPHPSys) CheckNetBindCap(_ string) sysutil.CapStatus      { return sysutil.CapStatus{} }
 func (s *stubPHPSys) SetNetBindCap(_ context.Context, _ string) error { return nil }
 func (s *stubPHPSys) OpenURL(_ context.Context, _ string) error       { return nil }
-func (s *stubPHPSys) IsRoot() bool                                    { return false }
+func (s *stubPHPSys) RunAttached(_ context.Context, _ string, _ []string, _ io.Reader, _, _ io.Writer) error {
+	return nil
+}
+func (s *stubPHPSys) IsRoot() bool { return false }
 func (s *stubPHPSys) Run(_ context.Context, name string, _ ...string) ([]byte, error) {
 	if v, ok := s.verByBin[name]; ok {
 		return []byte(v), nil

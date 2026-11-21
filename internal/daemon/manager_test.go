@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,7 +119,10 @@ func (f *fakeSys) HostsPath() string                               { return "/et
 func (f *fakeSys) CheckNetBindCap(_ string) sysutil.CapStatus      { return sysutil.CapStatus{} }
 func (f *fakeSys) SetNetBindCap(_ context.Context, _ string) error { return nil }
 func (f *fakeSys) OpenURL(_ context.Context, _ string) error       { return nil }
-func (f *fakeSys) IsRoot() bool                                    { return false }
+func (f *fakeSys) RunAttached(_ context.Context, _ string, _ []string, _ io.Reader, _, _ io.Writer) error {
+	return nil
+}
+func (f *fakeSys) IsRoot() bool { return false }
 func (f *fakeSys) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, append([]string{name}, args...))
 	if f.onRun != nil {

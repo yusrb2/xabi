@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,15 +23,18 @@ type fakeCall struct {
 }
 
 type fakeSystem struct {
-	bins        map[string]string
-	portsInUse  map[int]string
-	hosts       sysutil.HostsStatus
-	capSt       sysutil.CapStatus
-	setCapErr   error
-	runErrByBin map[string]error
-	calls       []fakeCall
-	setCapCalls []string
-	openedURLs  []string
+	bins          map[string]string
+	portsInUse    map[int]string
+	hosts         sysutil.HostsStatus
+	capSt         sysutil.CapStatus
+	setCapErr     error
+	runErrByBin   map[string]error
+	calls         []fakeCall
+	setCapCalls   []string
+	openedURLs    []string
+	attachedCalls []fakeCall
+	attachedErr   error
+	attachedOut   string
 }
 
 func (f *fakeSystem) LookBinary(candidates ...string) (string, bool) {
@@ -88,6 +92,14 @@ func (f *fakeSystem) IsRoot() bool {
 func (f *fakeSystem) OpenURL(_ context.Context, url string) error {
 	f.openedURLs = append(f.openedURLs, url)
 	return nil
+}
+
+func (f *fakeSystem) RunAttached(_ context.Context, name string, args []string, _ io.Reader, out, _ io.Writer) error {
+	f.attachedCalls = append(f.attachedCalls, fakeCall{name: name, args: args})
+	if f.attachedOut != "" && out != nil {
+		_, _ = io.WriteString(out, f.attachedOut)
+	}
+	return f.attachedErr
 }
 
 func testXDGResolver(t *testing.T) (xdg.Paths, func() (xdg.Paths, error)) {

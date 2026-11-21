@@ -65,8 +65,30 @@ Installs `xabi` to `~/.local/bin/xabi` by default (`PREFIX=/usr/local` for syste
 - `xabi php <version>` *(or `xabi php use <version>`)* — Switch global PHP default in `config.toml`, update symlinks (Linux) or `.cmd` shims (Windows) in `~/.local/share/xabi/bin/`, and refresh running PHP/Nginx services.
 - `xabi php pin <version>` — Write `.php-version` in the current project directory and update its site FastCGI target (`php-<ver>.sock` on Linux, `127.0.0.1:90xx` on Windows). `xabi add` also auto-reads `.php-version` from the project or nearest parent directory.
 
-### Planned Utilities
-- `xabi conf`, `xabi log`, `xabi share`, `xabi db`, `xabi completion` — Config editing, raw log tailing, tunneling, DB shell, and shell completion
+### Utilities & Shell Completion
+- `xabi conf [config|nginx|php|sites|<site>] [--path]` — Open the raw config file in `$VISUAL`/`$EDITOR` (`vi`/`nano` fallback on Linux, `notepad.exe` on Windows), or print the file path with `--path`.
+- `xabi log [nginx|php|mariadb|<site>] [-n <lines>] [--no-follow] [--access]` — Tail and follow raw service or site logs using built-in cross-platform streaming.
+- `xabi share [name] [--provider <cloudflared|ngrok>]` — Expose a local site over a public tunnel via `cloudflared` (default) or `ngrok`, forwarding `Ctrl+C` cleanly.
+- `xabi db [shell [name] | ls | create <name> | drop <name> [--force]]` — Connect to the user-space MariaDB/MySQL instance (`mysql.sock` on Linux, `127.0.0.1:<port>` on Windows) without typing credentials.
+- `xabi completion <bash|zsh|fish|powershell>` — Print shell completion script covering commands, services, and dynamic site names from `xabi ls`.
+
+Example shell completion setup:
+
+```sh
+# Bash
+xabi completion bash > ~/.local/share/bash-completion/completions/xabi
+
+# Zsh
+xabi completion zsh > ~/.zsh/completions/_xabi
+
+# Fish
+xabi completion fish > ~/.config/fish/completions/xabi.fish
+```
+
+```powershell
+# PowerShell ($PROFILE)
+xabi completion powershell | Out-String | Invoke-Expression
+```
 
 ## License
 

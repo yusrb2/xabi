@@ -24,7 +24,7 @@ func TestRunVersionAndHelp(t *testing.T) {
 	if code := run([]string{"--help"}, s); code != cli.ExitOK {
 		t.Fatalf("help exit code = %d, want 0", code)
 	}
-	for _, want := range []string{"Commands:", "init", "doctor", "up", "down", "restart", "status (st)", "add", "rm", "ls", "open", "tls", "php"} {
+	for _, want := range []string{"Commands:", "init", "doctor", "up", "down", "restart", "status (st)", "add", "rm", "ls", "open", "tls", "php", "conf", "log", "share", "db", "completion"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("help output missing %q: %q", want, out.String())
 		}

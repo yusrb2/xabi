@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -44,6 +45,7 @@ type System interface {
 	LookBinary(candidates ...string) (string, bool)
 	EvalSymlinks(path string) (string, error)
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
+	RunAttached(ctx context.Context, name string, args []string, in io.Reader, out, errW io.Writer) error
 	CheckPort(port int, timeout time.Duration) PortStatus
 	CheckHosts(path string) HostsStatus
 	HostsPath() string
@@ -104,6 +106,26 @@ func (OS) Run(ctx context.Context, name string, args ...string) ([]byte, error) 
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = HiddenSysProcAttr()
 	return cmd.CombinedOutput()
+}
+
+// RunAttached runs an interactive or streaming command attached to the provided I/O streams
+// and gracefully interrupts it if ctx is canceled.
+func (OS) RunAttached(ctx context.Context, name string, args []string, in io.Reader, out, errW io.Writer) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = in
+	cmd.Stdout = out
+	cmd.Stderr = errW
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
+	cmd.WaitDelay = 2 * time.Second
+	return cmd.Run()
 }
 
 // CheckPort probes whether a local TCP port is already accepting connections or bound.
